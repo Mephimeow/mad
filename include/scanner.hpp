@@ -3,28 +3,29 @@
 #include <string>
 #include <atomic>
 #include <mutex>
+#include <vector>
+#include "types.hpp"
 
 class PortScanner {
 public:
-    PortScanner(const std::string& target, int startPort, int endPort,
-                int threads, float timeout);
-
-    void scan();
+    PortScanner(const std::string& target, const std::vector<int>& ports,int threads, float timeout, ScanType scanType, bool detectVersion);
+    std::vector<ScanResult> scan();
 
 private:
-    void worker(std::atomic<int>& portCounter);
-    void scanPort(int port);
-    std::string getServiceName(int port) const;
+    void worker(std::atomic<int>& portIndex, std::vector<ScanResult>& results);
+    bool scanPort(int port);
+    bool sendTcpProbe(int port);
+    bool sendTcpProbeFallback(int port);
+    bool sendUdpProbe(int port);
+    std::string grabBanner(int port);
+    std::string getServiceInfo(int port) const;
 
     std::string target_;
-    int startPort_;
-    int endPort_;
+    std::vector<int> ports_;
     int threads_;
     float timeout_;
+    ScanType scanType_;
+    bool detectVersion_;
     std::mutex printMutex_;
     std::atomic<int> openCount_;
 };
-
-void validateIP(const std::string& ipStr);
-void parsePorts(const std::string& portStr, int& start, int& end);
-void printUsage(const char* prog);
