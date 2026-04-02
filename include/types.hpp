@@ -18,6 +18,7 @@ struct ScanResult {
     std::string service;
     std::string version;
     std::string description;
+    std::vector<std::string> cves;
 };
 
 struct ScanConfig {

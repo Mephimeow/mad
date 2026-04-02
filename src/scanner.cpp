@@ -21,7 +21,11 @@
 PortScanner::PortScanner(const std::string& target, const std::vector<int>& ports, int threads, float timeout, ScanType scanType, bool detectVersion)
     : target_(target), ports_(ports), threads_(threads), 
       timeout_(timeout), scanType_(scanType), 
-      detectVersion_(detectVersion), openCount_(0) {}
+      detectVersion_(detectVersion), openCount_(0), stateCallback_(nullptr) {}
+
+void PortScanner::setStateCallback(std::function<void(const std::vector<ScanResult>&)> callback) {
+    stateCallback_ = callback;
+}
 
 std::vector<ScanResult> PortScanner::scan() {
     std::vector<ScanResult> results;
@@ -72,8 +76,12 @@ void PortScanner::worker(std::atomic<int>& portIndex, std::vector<ScanResult>& r
             
             const PortInfo& info = PortDatabase::getInfo(port);
             result.description = info.description;
+            result.cves = info.cves;
             
-            results.push_back(result);
+            {
+                std::lock_guard<std::mutex> resultsLock(resultsMutex_);
+                results.push_back(result);
+            }
 
             std::lock_guard<std::mutex> lock(printMutex_);
             std::cout << "[+] " << port << "/" << result.protocol << " | " << result.service;
@@ -83,6 +91,14 @@ void PortScanner::worker(std::atomic<int>& portIndex, std::vector<ScanResult>& r
             
             if (!result.description.empty() && result.description != info.service) 
                 std::cout << " | " << result.description;
+            
+            if (!result.cves.empty()) {
+                std::cout << " | CVEs: ";
+                for (size_t i = 0; i < result.cves.size() && i < 3; ++i) {
+                    if (i > 0) std::cout << ", ";
+                    std::cout << result.cves[i];
+                }
+            }
             
             std::cout << "\n";
         }
@@ -175,23 +191,25 @@ bool PortScanner::sendTcpProbe(int port) {
     if (select(sock + 1, &readfds, nullptr, nullptr, &tv) > 0) {
         ssize_t len = recvfrom(sock, buffer, sizeof(buffer), 0, 
                                (struct sockaddr*)&src_addr, &addr_len);
-        if (len > 0) {
+        if (len > (ssize_t)sizeof(struct iphdr)) {
             struct iphdr* resp_ip = (struct iphdr*)buffer;
-            struct tcphdr* resp_tcp = (struct tcphdr*)(buffer + resp_ip->ihl * 4);
+            if (len > (ssize_t)(resp_ip->ihl * 4 + sizeof(struct tcphdr))) {
+                struct tcphdr* resp_tcp = (struct tcphdr*)(buffer + resp_ip->ihl * 4);
 
-            if (resp_tcp->source == tcph->dest) {
-                switch (scanType_) {
-                    case ScanType::SYN:
-                    case ScanType::CONNECT:
-                        if (resp_tcp->syn && resp_tcp->ack) open = true;
-                        break;
-                    case ScanType::FIN:
-                    case ScanType::XMAS:
-                    case ScanType::NULL_SCAN:
-                        if (!resp_tcp->rst) open = true;
-                        break;
-                    default:
-                        break;
+                if (resp_tcp->source == tcph->dest) {
+                    switch (scanType_) {
+                        case ScanType::SYN:
+                        case ScanType::CONNECT:
+                            if (resp_tcp->syn && resp_tcp->ack) open = true;
+                            break;
+                        case ScanType::FIN:
+                        case ScanType::XMAS:
+                        case ScanType::NULL_SCAN:
+                            if (!resp_tcp->rst) open = true;
+                            break;
+                        default:
+                            break;
+                    }
                 }
             }
         }

@@ -33,6 +33,7 @@ void Logger::close() {
 }
 
 void Logger::setLevel(LogLevel level) {
+    std::lock_guard<std::mutex> lock(mutex_);
     minLevel_ = level;
 }
 

@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <chrono>
 #include <cmath>
+#include <regex>
 
 bool ResultExporter::exportResults(const std::vector<ScanResult>& results,
                                    const std::string& filename,
@@ -126,6 +127,60 @@ std::string ResultExporter::resultsToCsv(const std::vector<ScanResult>& results)
     }
     
     return ss.str();
+}
+
+std::string ResultExporter::trim(const std::string& s) {
+    size_t start = s.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "";
+    size_t end = s.find_last_not_of(" \t\r\n");
+    return s.substr(start, end - start + 1);
+}
+
+bool ResultExporter::parseResultsFromJson(const std::string& json, std::vector<ScanResult>& results) {
+    results.clear();
+    
+    std::regex portRegex("\"port\":\\s*(\\d+)");
+    std::regex protoRegex("\"protocol\":\\s*\"([^\"]*)\"");
+    std::regex servRegex("\"service\":\\s*\"([^\"]*)\"");
+    std::regex versRegex("\"version\":\\s*\"([^\"]*)\"");
+    std::regex descRegex("\"description\":\\s*\"([^\"]*)\"");
+    
+    std::sregex_iterator it(json.begin(), json.end(), portRegex);
+    std::sregex_iterator end;
+    
+    for (; it != end; ++it) {
+        std::match_results<std::string::const_iterator> match = *it;
+        ScanResult result;
+        result.port = std::stoi(match[1].str());
+        
+        std::string::const_iterator searchStart = match[0].second;
+        
+        std::smatch protoMatch;
+        if (std::regex_search(searchStart, json.end(), protoMatch, protoRegex)) {
+            result.protocol = protoMatch[1].str();
+            searchStart = protoMatch[0].second;
+        }
+        
+        std::smatch servMatch;
+        if (std::regex_search(searchStart, json.end(), servMatch, servRegex)) {
+            result.service = servMatch[1].str();
+            searchStart = servMatch[0].second;
+        }
+        
+        std::smatch versMatch;
+        if (std::regex_search(searchStart, json.end(), versMatch, versRegex)) {
+            result.version = versMatch[1].str();
+        }
+        
+        std::smatch descMatch;
+        if (std::regex_search(searchStart, json.end(), descMatch, descRegex)) {
+            result.description = descMatch[1].str();
+        }
+        
+        results.push_back(result);
+    }
+    
+    return !results.empty();
 }
 
 std::string ResultExporter::resultsToText(const std::vector<ScanResult>& results) {
