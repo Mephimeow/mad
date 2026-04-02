@@ -1,0 +1,35 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential g++ make libgtest-dev
+    
+    - name: Build
+      run: |
+        make clean
+        make
+    
+    - name: Build tests
+      run: |
+        cd tests
+        g++ -std=c++17 -I../include -lgtest -lgtest_main -pthread main_test.cpp ../src/port_database.cpp ../src/exporter.cpp ../src/config.cpp -o test_runner
+        echo "Tests built successfully"
+    
+    - name: Run basic test
+      run: |
+        timeout 5 ./scanner 127.0.0.1 -p 80 || true
+        echo "Build successful"

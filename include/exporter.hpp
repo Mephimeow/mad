@@ -16,13 +16,14 @@ public:
     static bool exportResults(const std::vector<ScanResult>& results, 
                               const std::string& filename,
                               ExportFormat format);
-    
-private:
+    static bool parseResultsFromJson(const std::string& json, std::vector<ScanResult>& results);
     static std::string resultsToJson(const std::vector<ScanResult>& results);
     static std::string resultsToXml(const std::vector<ScanResult>& results);
     static std::string resultsToCsv(const std::vector<ScanResult>& results);
     static std::string resultsToText(const std::vector<ScanResult>& results);
     
+private:
     static std::string escapeJson(const std::string& s);
     static std::string escapeXml(const std::string& s);
+    static std::string trim(const std::string& s);
 };
