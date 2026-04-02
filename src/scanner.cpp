@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <netinet/ip.h>
+#include <netinet/ip_icmp.h>
 #include <netinet/udp.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -223,13 +224,20 @@ bool PortScanner::sendTcpProbeFallback(int port) {
 }
 
 bool PortScanner::sendUdpProbe(int port) {
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock < 0) return false;
+    int udpSock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (udpSock < 0) return false;
+
+    int icmpSock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    bool useIcmp = (icmpSock >= 0);
+    if (useIcmp) {
+        int enable = 1;
+        setsockopt(icmpSock, IPPROTO_IP, IP_HDRINCL, &enable, sizeof(enable));
+    }
 
     struct timeval tv;
     tv.tv_sec = static_cast<int>(timeout_);
     tv.tv_usec = static_cast<int>((timeout_ - static_cast<int>(timeout_)) * 1000000);
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(udpSock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -237,25 +245,61 @@ bool PortScanner::sendUdpProbe(int port) {
     addr.sin_port = htons(port);
     inet_pton(AF_INET, target_.c_str(), &addr.sin_addr);
 
-    char packet[4] = {0};
-    sendto(sock, packet, sizeof(packet), 0, (struct sockaddr*)&addr, sizeof(addr));
-
-    char buffer[4096];
-    struct sockaddr_in src_addr;
-    socklen_t addr_len = sizeof(src_addr);
-
     bool open = false;
-    ssize_t len = recvfrom(sock, buffer, sizeof(buffer), 0, 
-                           (struct sockaddr*)&src_addr, &addr_len);
+    bool filtered = false;
+    int probes = 3;
 
-    if (len < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+    for (int attempt = 0; attempt < probes && !open; ++attempt) {
+        char packet[4] = {0};
+        sendto(udpSock, packet, sizeof(packet), 0, (struct sockaddr*)&addr, sizeof(addr));
+
+        char buffer[4096];
+        struct sockaddr_in src_addr;
+        socklen_t addr_len = sizeof(src_addr);
+
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(udpSock, &readfds);
+        if (useIcmp) FD_SET(icmpSock, &readfds);
+        
+        int maxFd = useIcmp ? std::max(udpSock, icmpSock) : udpSock;
+        int selected = select(maxFd + 1, &readfds, nullptr, nullptr, &tv);
+
+        if (selected > 0) {
+            if (useIcmp && FD_ISSET(icmpSock, &readfds)) {
+                ssize_t len = recvfrom(icmpSock, buffer, sizeof(buffer), 0,
+                                       (struct sockaddr*)&src_addr, &addr_len);
+                if (len > 0) {
+                    struct iphdr* iph = (struct iphdr*)buffer;
+                    if (iph->protocol == IPPROTO_ICMP) {
+                        struct icmphdr* icmp = (struct icmphdr*)(buffer + iph->ihl * 4);
+                        if (icmp->type == ICMP_DEST_UNREACH) {
+                            filtered = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (FD_ISSET(udpSock, &readfds)) {
+                ssize_t len = recvfrom(udpSock, buffer, sizeof(buffer), 0,
+                                       (struct sockaddr*)&src_addr, &addr_len);
+                if (len > 0) {
+                    open = true;
+                }
+            }
+        } else if (selected == 0) {
+            if (attempt == probes - 1) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-    } else {
-        open = true;
     }
 
-    close(sock);
+    if (icmpSock >= 0) close(icmpSock);
+    close(udpSock);
+
+    if (filtered) return false;
     return open;
 }
 
